@@ -94,13 +94,14 @@ class MockLLM:
 def get_llm_client() -> LLMClient:
     """Build the client described by the environment (see config.py)."""
     if LLM_PROVIDER == "mock":
-        logger.warning("Using MockLLM - set LLM_PROVIDER and LLM_MODEL for real responses.")
+        logger.warning("LLM provider=mock model=none (set LLM_PROVIDER and LLM_MODEL for real responses)")
         return MockLLM()
 
     if not LLM_MODEL:
         raise ValueError(f"LLM_MODEL must be set when LLM_PROVIDER={LLM_PROVIDER}")
 
     if LLM_PROVIDER == "anthropic":
+        logger.info("LLM provider=anthropic model=%s", LLM_MODEL)
         return AnthropicClient(model=LLM_MODEL, api_key=LLM_API_KEY)
 
     if LLM_PROVIDER == "custom":
@@ -119,4 +120,5 @@ def get_llm_client() -> LLMClient:
     if preset.api_key_env and not api_key:
         raise ValueError(f"Set LLM_API_KEY or {preset.api_key_env} for LLM_PROVIDER={LLM_PROVIDER}")
 
+    logger.info("LLM provider=%s model=%s base_url=%s", LLM_PROVIDER, LLM_MODEL, base_url)
     return OpenAICompatibleClient(base_url=base_url, model=LLM_MODEL, api_key=api_key)

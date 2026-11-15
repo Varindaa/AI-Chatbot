@@ -42,9 +42,13 @@ class ChatService:
     def chat(self, user_id: str, session_id: str, message: str) -> ChatResult:
         # 1. Save anything worth remembering long-term (cross-session).
         saved = memory.remember(self.storage, user_id, message)
+        if saved:
+            logger.debug("memories saved user=%s keys=%s", user_id, saved)
 
         # 2. Pick only the memories relevant to this question.
         relevant = memory.recall(self.storage, user_id, message)
+        if relevant:
+            logger.debug("memories recalled user=%s keys=%s", user_id, [m.key for m in relevant])
 
         # 3. Short-term context: recent turns from this session only.
         history = self.storage.recent_messages(user_id, session_id, HISTORY_MESSAGES)
@@ -53,8 +57,9 @@ class ChatService:
         # 4. Ask the LLM, falling back to a polite message if the provider fails.
         try:
             reply = self.llm.generate(build_system_prompt(relevant), messages)
+            logger.debug("LLM reply user=%s session=%s reply=%r", user_id, session_id, reply[:120])
         except Exception:
-            logger.exception("LLM call failed; returning fallback reply")
+            logger.exception("LLM call failed user=%s session=%s; returning fallback reply", user_id, session_id)
             reply = FALLBACK_REPLY
 
         # 5. Log the turn so the next message can use it as history.
