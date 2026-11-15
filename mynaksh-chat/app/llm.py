@@ -34,7 +34,7 @@ class OpenAICompatibleClient:
         model: str,
         api_key: str | None = None,
         max_tokens: int | None = None,
-        timeout: float = 60.0,
+        timeout: float = 120.0,
         http_client: httpx.Client | None = None,
     ) -> None:
         self._url = base_url.rstrip("/") + "/chat/completions"

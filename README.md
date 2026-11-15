@@ -1,168 +1,199 @@
-# MyNaksh — Personalized AI Chat
+# MyNaksh — Personalized Astrology Chat
 
-A small FastAPI chat service that answers with an LLM, uses recent session history for
-follow-ups, remembers useful facts about a user across sessions, and sends the LLM only
-the memories relevant to the current question.
+A FastAPI chat service with a browser UI that answers with an LLM, remembers useful facts
+about a user across sessions, and sends the LLM only the memories relevant to the current question.
 
-## Setup
+## UI
+
+![MyNaksh chat UI showing a conversation about sun sign](images/img.png)
+
+## Quick start
 
 ```bash
+cd mynaksh-chat
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-
-export ANTHROPIC_API_KEY=sk-ant-...      # optional: without it, a mock LLM is used
-uvicorn app.main:create_app --factory --reload
 ```
 
-Open http://localhost:8000/docs for interactive API docs.
-
-| Env var | Default | Purpose |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | – | Enables the real LLM |
-| `LLM_PROVIDER` | `anthropic` if a key is set, else `mock` | `anthropic` or `mock` |
-| `LLM_MODEL` | `claude-haiku-5-5` | Model name |
-| `DB_PATH` | `chat.db` | SQLite file |
-
-Run tests (no API key or network needed):
+Set your LLM credentials (see **Configuration** below), then:
 
 ```bash
+uvicorn app.main:app --reload
+```
+
+Open **http://localhost:8000** for the chat UI, or **http://localhost:8000/docs** for the
+interactive API docs.
+
+## Configuration
+
+All settings live in `app/config.py` and can be overridden with environment variables.
+
+| Env var | Default | Purpose                                                                                                                          |
+|---|---|----------------------------------------------------------------------------------------------------------------------------------|
+| `LLM_PROVIDER` | `mock` | `mock` · `anthropic` · `gemini` · `openai` · `grok` · `qwen` · `kimi` · `deepseek` · `groq` · `openrouter` · `ollama` · `custom` |
+| `LLM_MODEL` | – | Model name, e.g. `gemini-4-hydrogen`, `gpt-4-astra`, `claude-haiku-5-5`                                                          |
+| `LLM_API_KEY` | – | API key; falls back to the provider's own variable (e.g. `GEMINI_API_KEY`)                                                       |
+| `LLM_BASE_URL` | – | Override the endpoint URL (required for `LLM_PROVIDER=custom`)                                                                   |
+| `DB_PATH` | `chat.db` | SQLite file for chat history and memories                                                                                        |
+
+**Gemini example**
+
+```bash
+export LLM_PROVIDER=gemini
+export LLM_MODEL=gemini-4-hydrogen
+export GEMINI_API_KEY=your-key-here
+uvicorn app.main:app --reload
+```
+
+**Anthropic example**
+
+```bash
+export LLM_PROVIDER=anthropic
+export LLM_MODEL=claude-haiku-5-5
+export ANTHROPIC_API_KEY=sk-ant-...
+uvicorn app.main:app --reload
+```
+
+Without any env vars, the service starts with a mock LLM that echoes your message — useful
+for testing the memory and history logic without an API key.
+
+## Logging
+
+Logs are written to both **stdout** (visible in the uvicorn terminal) and **`app.log`** in the
+working directory. The log level is `DEBUG`, so every request, LLM selection, memory save,
+and memory recall is recorded.
+
+```
+2026-11-15 10:00:01 INFO  app.llm: LLM provider=gemini model=gemini-2.0-flash base_url=https://...
+2026-11-15 10:00:01 INFO  app.main: App started — db=chat.db
+2026-11-15 10:00:05 INFO  app.main: chat request  user=user-1 session=abc message='What is my moon sign?'
+2026-11-15 10:00:06 DEBUG app.chat_service: LLM reply user=user-1 session=abc reply='Your moon sign...'
+2026-11-15 10:00:06 INFO  app.main: chat response user=user-1 session=abc memories_saved=[] context_used=[]
+```
+
+## Running tests
+
+No API key or network connection needed:
+
+```bash
+cd mynaksh-chat
 pytest
 ```
 
 ## Architecture
 
 ```
-app/
-  main.py          HTTP layer: request/response models, POST /chat
-  chat_service.py  One chat turn: remember -> recall -> prompt -> LLM -> log
-  memory.py        Rules for what to save and what to retrieve (pure logic)
-  llm.py           LLMClient interface + Anthropic and Mock implementations
-  storage.py       SQLite: messages table (history) + memories table
-tests/
-  test_chat.py     End-to-end tests through the API with a mock LLM
+mynaksh-chat/
+  app/
+    config.py        All constants and environment variables (single source of truth)
+    main.py          FastAPI app: POST /chat, GET /users/{id}/memories, GET /
+    chat_service.py  One chat turn: remember → recall → prompt → LLM → store
+    memory.py        Rule-based logic for saving and retrieving memories (pure, no I/O)
+    llm.py           LLMClient protocol + Anthropic, OpenAI-compatible, and Mock clients
+    storage.py       SQLite: messages table (session history) + memories table
+    static/
+      index.html     Browser chat UI
+  tests/
+    test_chat.py     End-to-end tests through the HTTP API with an in-memory DB and mock LLM
 ```
 
-Each module has one job, and the dependencies point one way:
-`main → chat_service → memory / llm / storage`. `create_app(storage, llm)` lets tests inject
-an in-memory database and a mock LLM.
+Dependencies flow one way: `main → chat_service → memory / llm / storage`.
+`create_app(storage, llm)` lets tests inject an in-memory database and a mock LLM without
+touching any global state.
 
 ### One chat turn
 
 1. **Remember.** Extract facts from the message and upsert them into `memories`.
 2. **Recall.** Pick only the memories relevant to this message.
-3. **History.** Load the last 6 messages (3 exchanges) of *this session*.
+3. **History.** Load the last 6 messages (3 exchanges) of *this session only*.
 4. **Generate.** System prompt = persona + relevant memories + language instruction;
-   messages = history + current message. If the LLM fails, return a fallback reply.
-5. **Log.** Save the user message and reply to `messages`.
+   user messages = history + current message. If the LLM fails, return a graceful fallback.
+5. **Store.** Save the user message and reply to `messages` for future history.
 
-## Memory approach
+## Memory system
 
-**Storage.** One row per `(user_id, category)`, for example `career_goal` or
-`language_preference`. The value is what the user said, e.g. *"I'm planning to switch jobs
-next year"*. Saving the same category again replaces the old value, so corrections work
-automatically. `interests` is the exception: it accumulates, because people have many.
+**Storage.** One row per `(user_id, category)`, e.g. `career_goal` or `language_preference`.
+Saving the same category again replaces the old value, so corrections work automatically.
+`interests` accumulates (people have more than one).
 
 **What gets saved (rule-based).** The message is split into statements. Questions are skipped.
 
-- *Goals* (career, relationship, finance, education, health) need a topic word (*job*,
-  *marriage*…) **and** an intent word (*planning*, *want*, *hope*…).
+- *Goals* (career, relationship, finance, education, health) need a topic word (*job*, *marriage*…)
+  **and** an intent word (*planning*, *want*, *hope*…).
 - *Facts* need a trigger phrase: *"I was born…"*, *"I live in…"*, *"I love…"*.
 - *Language preference* is matched with patterns like *"prefer … Hindi"* or *"reply in English"*.
-- Goals and facts must be first-person (*I / my / me*), so "my sister is getting married"
-  isn't saved as the user's goal.
+- All of the above must be first-person (*I / my / me*), so *"my sister is getting married"*
+  is not saved as the user's goal.
 
-**What gets retrieved.** A memory is sent to the LLM only if the question mentions that
-category's topic words, or shares a meaningful (non-stopword) word with the memory. The
-language preference is always included because it affects every reply. A generic question
-like *"What do you remember about me?"* returns everything. `context_used` in the response
-lists exactly which memories were sent.
+**What gets retrieved.** A memory is included only if the question mentions that category's
+topic words, or shares a meaningful (non-stopword) word with the stored value. Language
+preference is always included. A question like *"What do you remember about me?"* returns
+everything. The `context_used` field in every response lists exactly which memories were sent.
 
-### Why rules instead of an LLM extractor or embeddings?
+### Why rule-based instead of embeddings or an LLM extractor?
 
-- **Predictable and testable.** Tests assert exact behaviour with no flakiness.
-- **Cheap and fast.** No extra LLM call per message.
-- **Easy to explain.** Every save or recall decision can be traced to a rule.
+- **Predictable and testable** — tests assert exact behaviour with no flakiness or API cost.
+- **Cheap and fast** — no extra LLM call per message.
+- **Easy to explain** — every save/recall decision traces to a named rule.
 
-The trade-off is recall. Rules miss phrasings they don't anticipate ("thinking of quitting"
-has no career word) and can't resolve "it"/"that". `memory.extract_memories` is a pure
-function with the same output shape an LLM extractor would have, so it can be replaced
-without touching the rest of the code.
+`memory.extract_memories` is a pure function with the same output shape an LLM extractor
+would produce, so it can be swapped without touching any other module.
 
-### Known limitations / next steps
+## API reference
 
-- Follow-ups like *"Why do you say that?"* don't re-retrieve memories (no topic words). The
-  previous answer is in history, so context is kept, but retrieval could also carry over the
-  last turn's `context_used`.
-- Single-valued categories hold only the latest statement (e.g. one career goal).
-- An LLM-based extractor (with JSON output and a confidence score) would improve recall.
-
-## Sample requests and responses
-
-Responses below come from the mock LLM; with a real key, `response` contains the model's
-answer. The other fields are identical.
-
-**1. Share a goal and a preference** (session-1)
+### `POST /chat`
 
 ```bash
-curl -s localhost:8000/chat -H 'Content-Type: application/json' -d '{
-  "user_id": "user-123", "session_id": "session-1",
-  "message": "I love painting. I am planning to switch jobs next year, and I prefer advice in Hindi."
-}'
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "user-1", "session_id": "session-1", "message": "What is my moon sign?"}'
 ```
+
 ```json
 {
-  "user_id": "user-123",
+  "user_id": "user-1",
   "session_id": "session-1",
-  "response": "[mock reply] You asked: I love painting. I am planning to switch jobs next year, and I prefer advice in Hindi.",
-  "context_used": ["career_goal", "interests", "language_preference"],
-  "memories_saved": ["interests", "career_goal", "language_preference"]
-}
-```
-
-**2. Career question.** Painting is excluded as irrelevant.
-
-```json
-// request:  {"user_id": "user-123", "session_id": "session-1", "message": "What should I focus on for my career?"}
-{
-  "response": "...",
-  "context_used": ["career_goal", "language_preference"],
+  "response": "Based on your birth details (July 31, 1998, at 7:58 PM in Sangrur), your **Vedic Moon sign (Chandra Rashi) is Libra (Tula)**, with the Moon placed around **15° Libra** (in Swati Nakshatra).\n\n*(Note: If you also follow Western/Tropical astrology, your Moon sign there is **Scorpio**.)*\n\n**What a Libra Moon means for you:**\n* **Emotional style:** You naturally seek balance, peace, and harmony in your surroundings and relationships. Conflict can feel unsettling, so you often play the mediator.\n* **Practical strength:** You have a strong sense of fairness, good diplomatic instincts, and an appreciation for beauty, art, and thoughtful conversation.\n* **Gentle tip:** Because you care deeply about keeping things harmonious, be mindful not to over-compromise or stay indecisive just to keep everyone else happy—giving your own needs equal weight brings you the greatest emotional ease.",
+  "context_used": ["birth_details"],
   "memories_saved": []
 }
 ```
 
-**3. Follow-up** in the same session. The previous turns are sent as history.
+> `context_used: ["birth_details"]` shows the service recalled the user's saved birth details
+> and passed them to the LLM to compute the moon sign — no manual lookup needed.
 
-```json
-// request:  {"user_id": "user-123", "session_id": "session-1", "message": "Why do you say that?"}
-{ "response": "...", "context_used": ["language_preference"], "memories_saved": [] }
-```
-
-**4. Recall in a new session**
-
-```json
-// request:  {"user_id": "user-123", "session_id": "session-2", "message": "What do you remember about my career plans?"}
-{ "response": "...", "context_used": ["career_goal", "language_preference"], "memories_saved": [] }
-```
-
-**Inspect stored memories:** `GET /users/user-123/memories`
+### `GET /users/{user_id}/memories`
 
 ```json
 [
-  {"key": "career_goal", "value": "I am planning to switch jobs next year"},
-  {"key": "interests", "value": "I love painting"},
-  {"key": "language_preference", "value": "Hindi"}
+  { "key": "career_goal",        "value": "I am planning to switch jobs next year" },
+  { "key": "interests",          "value": "I love painting" },
+  { "key": "language_preference","value": "Hindi" }
 ]
 ```
+
+### `GET /`
+
+Returns the browser chat UI.
 
 ## Tests
 
 | Test | Verifies |
 |---|---|
-| `test_user_gets_a_response` | Basic request/response |
+| `test_user_gets_a_response` | Basic request/response shape |
 | `test_memory_is_saved_and_recalled_in_a_new_session` | Cross-session memory reaches the LLM prompt |
 | `test_follow_up_question_uses_session_history` | History is sent for follow-ups; sessions are isolated |
 | `test_irrelevant_memories_are_excluded` | An interest is not sent for a career question |
 | `test_questions_are_not_stored_as_memories` | Not every message becomes a memory |
 | `test_correction_replaces_old_memory` | "Reply in English" replaces "Hindi" |
-| `test_memories_are_isolated_per_user` | No leakage between users |
-| `test_fallback_reply_when_llm_fails` | Provider outage returns a graceful reply |
+| `test_memories_are_isolated_per_user` | No memory leakage between users |
+| `test_fallback_reply_when_llm_fails` | Provider outage returns a graceful fallback |
+
+## Known limitations
+
+- Follow-up questions (*"Why do you say that?"*) don't re-retrieve memories because they
+  carry no topic words. Context is preserved via session history, but explicit memory recall
+  could also carry over the previous turn's `context_used`.
+- Single-valued categories hold only the latest statement (one career goal at a time).
+- Rule-based extraction misses unusual phrasings (*"thinking of quitting"* has no career
+  keyword). An LLM-based extractor with JSON output would improve recall coverage.
