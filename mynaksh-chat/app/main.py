@@ -3,28 +3,18 @@ from __future__ import annotations
 
 import logging
 import pathlib
-import sys
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
-
-_STATIC = pathlib.Path(__file__).parent / "static"
-
-_fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-_file_handler = logging.FileHandler("app.log")
-_file_handler.setFormatter(_fmt)
-_stream_handler = logging.StreamHandler(sys.stdout)
-_stream_handler.setFormatter(_fmt)
-logging.root.setLevel(logging.DEBUG)
-logging.root.addHandler(_file_handler)
-logging.root.addHandler(_stream_handler)
-
 from pydantic import BaseModel
 
 from app.chat_service import ChatService
 from app.config import DB_PATH
 from app.llm import LLMClient, get_llm_client
+from app.logging_config import setup_logging
 from app.storage import Storage
+
+_STATIC = pathlib.Path(__file__).parent / "static"
 
 logger = logging.getLogger(__name__)
 
@@ -77,4 +67,11 @@ def create_app(storage: Storage | None = None, llm: LLMClient | None = None) -> 
     return app
 
 
-app = create_app()
+
+def create_default_app() -> FastAPI:
+    """Production entry point: configure logging, then build the app from the environment.
+
+    Run with: uvicorn app.main:create_default_app --factory
+    """
+    setup_logging()
+    return create_app()

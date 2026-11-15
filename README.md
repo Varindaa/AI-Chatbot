@@ -18,7 +18,7 @@ pip install -r requirements.txt
 Set your LLM credentials (see **Configuration** below), then:
 
 ```bash
-uvicorn app.main:app --reload
+uvicorn app.main:create_default_app --factory --reload
 ```
 
 Open **http://localhost:8000** for the chat UI, or **http://localhost:8000/docs** for the
@@ -35,6 +35,7 @@ All settings live in `app/config.py` and can be overridden with environment vari
 | `LLM_API_KEY` | – | API key; falls back to the provider's own variable (e.g. `GEMINI_API_KEY`)                                                       |
 | `LLM_BASE_URL` | – | Override the endpoint URL (required for `LLM_PROVIDER=custom`)                                                                   |
 | `DB_PATH` | `chat.db` | SQLite file for chat history and memories                                                                                        |
+| `LOG_FILE` | `app.log` | Log file path                                                                                                                    |
 
 **Gemini example**
 
@@ -42,7 +43,7 @@ All settings live in `app/config.py` and can be overridden with environment vari
 export LLM_PROVIDER=gemini
 export LLM_MODEL=gemini-4-hydrogen
 export GEMINI_API_KEY=your-key-here
-uvicorn app.main:app --reload
+uvicorn app.main:create_default_app --factory --reload
 ```
 
 **Anthropic example**
@@ -51,7 +52,7 @@ uvicorn app.main:app --reload
 export LLM_PROVIDER=anthropic
 export LLM_MODEL=claude-haiku-5-5
 export ANTHROPIC_API_KEY=sk-ant-...
-uvicorn app.main:app --reload
+uvicorn app.main:create_default_app --factory --reload
 ```
 
 Without any env vars, the service starts with a mock LLM that echoes your message — useful
