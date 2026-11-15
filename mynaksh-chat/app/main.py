@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import logging
+import pathlib
+import sys
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 
-import sys
+_STATIC = pathlib.Path(__file__).parent / "static"
 
 _fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
 _file_handler = logging.FileHandler("app.log")
@@ -66,6 +69,10 @@ def create_app(storage: Storage | None = None, llm: LLMClient | None = None) -> 
     @app.get("/users/{user_id}/memories")
     def get_memories(user_id: str) -> list[dict]:
         return [{"key": m.key, "value": m.value} for m in _storage.get_memories(user_id)]
+
+    @app.get("/")
+    def index() -> FileResponse:
+        return FileResponse(_STATIC / "index.html")
 
     return app
 
